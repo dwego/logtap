@@ -23,7 +23,7 @@ fn notify_detects_file_modification() {
     let mut watcher = notify::recommended_watcher(move |result| {
         tx.send(result).unwrap();
     })
-        .unwrap();
+    .unwrap();
 
     watcher.watch(&path, RecursiveMode::NonRecursive).unwrap();
 
@@ -42,7 +42,7 @@ fn notify_detects_file_modification() {
             .expect("timeout: notify did not detect file modification")
             .expect("notify returned error");
 
-        received_kinds.push(event.kind.clone());
+        received_kinds.push(event.kind);
 
         if matches!(event.kind, EventKind::Modify(_)) {
             saw_modify = true;

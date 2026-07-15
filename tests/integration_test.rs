@@ -75,7 +75,11 @@ async fn integration_source_parser_filter_sink_sends_log_to_http_server() {
         batch_size: 1,
         flush_interval_secs: 60,
         channel_capacity: 10,
+        max_retries: 0,
+        retry_backoff_initial_ms: 0,
+        retry_backoff_max_secs: 0,
         filter_rules: vec![],
+        mask_common_patterns: false,
     };
 
     let app = tokio::spawn(async move {
@@ -94,7 +98,7 @@ async fn integration_source_parser_filter_sink_sends_log_to_http_server() {
             file,
             r#"{{"level":"info","message":"integration test worked"}}"#
         )
-            .unwrap();
+        .unwrap();
     }
 
     let body = tokio::time::timeout(Duration::from_secs(3), server)
@@ -114,6 +118,93 @@ async fn integration_source_parser_filter_sink_sends_log_to_http_server() {
             {
                 "level": "info",
                 "message": "integration test worked"
+            }
+        ])
+    );
+}
+
+#[tokio::test]
+async fn integration_loads_real_config_file_and_delivers_filtered_log() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+
+        let body = read_http_request_body(&mut stream).await;
+
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+            .await
+            .unwrap();
+
+        body
+    });
+
+    let source_path = PathBuf::from("integration_config_file.log");
+    fs::write(&source_path, "").unwrap();
+
+    let config_path = PathBuf::from("integration_config_file.toml");
+    let config_toml = format!(
+        r#"
+source_path = "{source}"
+sink_url = "http://{address}/logs"
+batch_size = 1
+flush_interval_secs = 60
+channel_capacity = 10
+max_retries = 0
+retry_backoff_initial_ms = 0
+retry_backoff_max_secs = 0
+mask_common_patterns = false
+
+[[filter_rules]]
+field = "level"
+op = "equals"
+value = "debug"
+action = "drop"
+"#,
+        source = source_path.display(),
+        address = address
+    );
+    fs::write(&config_path, config_toml).unwrap();
+
+    let cfg =
+        logtap::Config::load(config_path.to_str().unwrap()).expect("failed to load logtap.toml");
+
+    let app = tokio::spawn(async move {
+        logtap::run(cfg).await.unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    {
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&source_path)
+            .unwrap();
+
+        writeln!(file, r#"{{"level":"debug","message":"should be dropped"}}"#).unwrap();
+        writeln!(file, r#"{{"level":"info","message":"config file worked"}}"#).unwrap();
+    }
+
+    let body = tokio::time::timeout(Duration::from_secs(3), server)
+        .await
+        .expect("timeout: sink did not send request to test HTTP server")
+        .unwrap();
+
+    app.abort();
+
+    fs::remove_file(&source_path).ok();
+    fs::remove_file(&config_path).ok();
+
+    let received_logs: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+    assert_eq!(
+        received_logs,
+        serde_json::json!([
+            {
+                "level": "info",
+                "message": "config file worked"
             }
         ])
     );
