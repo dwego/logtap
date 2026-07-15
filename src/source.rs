@@ -1,8 +1,11 @@
 use std::fs::File;
-use tokio::time::{sleep, Duration};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use tokio::time::{Duration, sleep};
 
-pub async fn run_source(cfg: crate::config::Config, tx: tokio::sync::mpsc::Sender<String>) -> anyhow::Result<()>{
+pub async fn run_source(
+    cfg: crate::config::Config,
+    tx: tokio::sync::mpsc::Sender<String>,
+) -> anyhow::Result<()> {
     let mut offset: u64 = 0;
 
     loop {
@@ -24,7 +27,7 @@ pub async fn run_source(cfg: crate::config::Config, tx: tokio::sync::mpsc::Sende
             let trimmed = line.trim_end().to_string();
 
             if tx.send(trimmed).await.is_err() {
-                return Ok(()); 
+                return Ok(());
             }
         }
 

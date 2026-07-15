@@ -14,6 +14,7 @@ async fn test_run_source() {
         batch_size: 100,
         flush_interval_secs: 5,
         channel_capacity: 100,
+        filter_rules: vec![],
     };
 
     tokio::spawn(async move {

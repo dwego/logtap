@@ -11,7 +11,6 @@ pub async fn run_parser(mut rx: Receiver<String>, tx: Sender<LogLine>) {
     }
 }
 
-
 pub fn parse_line(line: &str) -> LogLine {
     match serde_json::from_str::<LogLine>(line) {
         Ok(value) if value.is_object() => value,
