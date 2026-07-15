@@ -11,12 +11,14 @@ pub enum RuleOp {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "lowercase")]
 pub enum RuleAction {
     Drop,
     Mask,
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "lowercase")]
 pub struct FilterRule {
     pub field: String,
     pub op: RuleOp,
