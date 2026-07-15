@@ -29,6 +29,5 @@ pub async fn run_source(cfg: crate::config::Config, tx: tokio::sync::mpsc::Sende
         }
 
         sleep(Duration::from_millis(500)).await;
-
     }
 }
