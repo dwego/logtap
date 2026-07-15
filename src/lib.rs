@@ -14,13 +14,18 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     let (clean_tx, clean_rx) = tokio::sync::mpsc::channel::<LogLine>(cfg.channel_capacity);
 
     let source_cfg = cfg.clone();
-    let source_handle =
-        tokio::task::spawn_blocking(move || source::run_source(source_cfg, raw_tx));
+    let mask_common_patterns = source_cfg.mask_common_patterns;
+    let source_handle = tokio::task::spawn_blocking(move || source::run_source(source_cfg, raw_tx));
 
     let parser_handle = tokio::spawn(parser::run_parser(raw_rx, parsed_tx));
 
     let rules = cfg.filter_rules.clone();
-    let filter_handle = tokio::spawn(filter::run_filter(parsed_rx, clean_tx, rules));
+    let filter_handle = tokio::spawn(filter::run_filter(
+        parsed_rx,
+        clean_tx,
+        rules,
+        mask_common_patterns,
+    ));
 
     let sink_cfg = cfg.clone();
     let sink_handle = tokio::spawn(sink::run_sink(sink_cfg, clean_rx));

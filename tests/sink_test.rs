@@ -71,7 +71,11 @@ async fn sink_posts_logs_when_batch_size_is_reached() {
         batch_size: 2,
         flush_interval_secs: 60,
         channel_capacity: 10,
+        max_retries: 3,
+        retry_backoff_initial_ms: 100,
+        retry_backoff_max_secs: 5,
         filter_rules: vec![],
+        mask_common_patterns: false,
     };
 
     let (tx, rx) = tokio::sync::mpsc::channel::<LogLine>(cfg.channel_capacity);

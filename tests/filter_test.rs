@@ -12,7 +12,7 @@ async fn filter_drops_log_when_equals_rule_matches() {
         action: RuleAction::Drop,
     }];
 
-    let filter = tokio::spawn(run_filter(input_rx, output_tx, rules));
+    let filter = tokio::spawn(run_filter(input_rx, output_tx, rules, false));
 
     input_tx
         .send(serde_json::json!({
@@ -43,7 +43,7 @@ async fn filter_keeps_log_when_no_rule_matches() {
         action: RuleAction::Drop,
     }];
 
-    let filter = tokio::spawn(run_filter(input_rx, output_tx, rules));
+    let filter = tokio::spawn(run_filter(input_rx, output_tx, rules, false));
 
     input_tx
         .send(serde_json::json!({
@@ -80,7 +80,7 @@ async fn filter_masks_field_when_contains_rule_matches() {
         action: RuleAction::Mask,
     }];
 
-    let filter = tokio::spawn(run_filter(input_rx, output_tx, rules));
+    let filter = tokio::spawn(run_filter(input_rx, output_tx, rules, false));
 
     input_tx
         .send(serde_json::json!({
@@ -112,7 +112,7 @@ async fn filter_applies_regex_rule() {
         action: RuleAction::Mask,
     }];
 
-    let filter = tokio::spawn(run_filter(input_rx, output_tx, rules));
+    let filter = tokio::spawn(run_filter(input_rx, output_tx, rules, false));
 
     input_tx
         .send(serde_json::json!({
@@ -128,4 +128,55 @@ async fn filter_applies_regex_rule() {
     filter.await.unwrap();
 
     assert_eq!(received["message"], serde_json::json!("***"));
+}
+
+#[tokio::test]
+async fn filter_masks_builtin_email_pattern_when_enabled() {
+    let (input_tx, input_rx) = tokio::sync::mpsc::channel(10);
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::channel(10);
+
+    let filter = tokio::spawn(run_filter(input_rx, output_tx, vec![], true));
+
+    input_tx
+        .send(serde_json::json!({
+            "message": "user login: user@example.com"
+        }))
+        .await
+        .unwrap();
+
+    drop(input_tx);
+
+    let received = output_rx.recv().await.unwrap();
+
+    filter.await.unwrap();
+
+    let message = received["message"].as_str().unwrap();
+    assert!(!message.contains("user@example.com"));
+    assert!(message.contains("***"));
+}
+
+#[tokio::test]
+async fn filter_does_not_mask_builtin_patterns_when_disabled() {
+    let (input_tx, input_rx) = tokio::sync::mpsc::channel(10);
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::channel(10);
+
+    let filter = tokio::spawn(run_filter(input_rx, output_tx, vec![], false));
+
+    input_tx
+        .send(serde_json::json!({
+            "message": "user login: user@example.com"
+        }))
+        .await
+        .unwrap();
+
+    drop(input_tx);
+
+    let received = output_rx.recv().await.unwrap();
+
+    filter.await.unwrap();
+
+    assert_eq!(
+        received["message"],
+        serde_json::json!("user login: user@example.com")
+    );
 }

@@ -4,7 +4,14 @@ use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::sync::mpsc as std_mpsc;
+use std::time::Duration;
 use tokio::sync::mpsc::Sender;
+
+// How often the watch loop wakes up even without a filesystem event, just to
+// check whether the downstream receiver is gone. Without this, the loop can
+// block forever on `notify_rx.recv()` after the rest of the pipeline shut
+// down, since there is no more filesystem activity left to notice it.
+const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 pub fn run_source(cfg: Config, tx: Sender<String>) -> Result<()> {
     let file = File::open(&cfg.source_path)?;
@@ -19,8 +26,17 @@ pub fn run_source(cfg: Config, tx: Sender<String>) -> Result<()> {
 
     let mut line = String::new();
 
-    for res in notify_rx {
-        let event = res?;
+    loop {
+        let event = match notify_rx.recv_timeout(SHUTDOWN_POLL_INTERVAL) {
+            Ok(res) => res?,
+            Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                if tx.is_closed() {
+                    return Ok(());
+                }
+                continue;
+            }
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        };
 
         if !matches!(event.kind, EventKind::Modify(_)) {
             continue;
@@ -44,6 +60,4 @@ pub fn run_source(cfg: Config, tx: Sender<String>) -> Result<()> {
             }
         }
     }
-
-    Ok(())
 }

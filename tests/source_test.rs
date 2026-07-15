@@ -21,7 +21,11 @@ async fn test_run_source_emite_linhas_novas() {
         batch_size: 100,
         flush_interval_secs: 5,
         channel_capacity: 100,
+        max_retries: 3,
+        retry_backoff_initial_ms: 100,
+        retry_backoff_max_secs: 5,
         filter_rules: vec![],
+        mask_common_patterns: false,
     };
 
     let _handle = tokio::task::spawn_blocking(move || run_source(cfg, tx));
