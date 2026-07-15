@@ -1,9 +1,8 @@
-use tokio::sync::mpsc::Receiver;
-use std::time::Duration;
-use tokio::time::interval;
 use crate::config::Config;
 use crate::record::LogLine;
-
+use std::time::Duration;
+use tokio::sync::mpsc::Receiver;
+use tokio::time::interval;
 
 async fn flush(client: &reqwest::Client, url: &str, batch: &mut Vec<LogLine>) {
     if batch.is_empty() {
@@ -12,8 +11,14 @@ async fn flush(client: &reqwest::Client, url: &str, batch: &mut Vec<LogLine>) {
 
     match client.post(url).json(batch).send().await {
         Ok(resp) if resp.status().is_success() => {}
-        Ok(resp) => eprintln!("logtap: destination responded with status {}", resp.status()),
-        Err(err) => eprintln!("logtap: failed to send batch ({} items): {err}", batch.len()),
+        Ok(resp) => eprintln!(
+            "logtap: destination responded with status {}",
+            resp.status()
+        ),
+        Err(err) => eprintln!(
+            "logtap: failed to send batch ({} items): {err}",
+            batch.len()
+        ),
     }
 
     batch.clear();

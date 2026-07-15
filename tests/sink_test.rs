@@ -58,9 +58,7 @@ async fn sink_posts_logs_when_batch_size_is_reached() {
         let body = read_http_request_body(&mut stream).await;
 
         stream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-            )
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
             .await
             .unwrap();
 
