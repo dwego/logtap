@@ -153,3 +153,22 @@ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 CI runs all three on every pull request and on pushes to `main`.
+
+## Roadmap
+
+### v1 acceptance criteria
+
+v1 is done when all of the following hold:
+
+- [ ] No batch is ever lost silently — every failed send is retried or persisted locally.
+- [ ] The process survives log rotation without manual intervention.
+- [ ] No channel grows unbounded under any tested load condition.
+- [ ] Every config field is validated with a clear error message at startup — never fails silently at runtime.
+- [ ] Sensitive data is masked by default, even with no user-configured rules.
+- [ ] External visibility (metrics) into what the pipeline is doing, without reading logtap's own stderr output.
+- [ ] End-to-end integration test covering the full pipeline, plus unit tests per stage.
+- [ ] Installing and running the project requires no source reading — README and example config are enough.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
