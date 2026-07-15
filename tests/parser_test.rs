@@ -7,43 +7,46 @@ mod tests {
 
     #[test]
     fn test_run_parse() {
-        let linha = r#"{"level": "info", "msg": "server started"}"#;
+        let line = r#"{"level": "info", "msg": "server started"}"#;
 
-        let resultado = parse_line(linha);
+        let result = parse_line(line);
 
         assert_eq!(
-            resultado.fields.get("level"),
+            result.get("level"),
             Some(&Value::String("info".to_string()))
         );
         assert_eq!(
-            resultado.fields.get("msg"),
+            result.get("msg"),
             Some(&Value::String("server started".to_string()))
         );
-        assert_eq!(resultado.raw, linha);
     }
 
     #[test]
     fn parseline_with_text() {
-        let linha = "isso aqui nao e json";
+        let line = "isso aqui nao e json";
 
-        let resultado = parse_line(linha);
+        let result = parse_line(line);
 
         assert_eq!(
-            resultado.fields.get("message"),
-            Some(&Value::String(linha.to_string()))
+            result.get("message"),
+            Some(&Value::String(line.to_string()))
         );
         assert_eq!(
-            resultado.fields.get("level"),
+            result.get("level"),
             Some(&Value::String("UNKNOWN".to_string()))
+        );
+        assert_eq!(
+            result.get("parse_issue"),
+            Some(&Value::String("invalid_json".to_string()))
         );
     }
 
     #[test]
     fn parse_empty_json_line_returns_empty_object() {
-        let linha = "{}";
+        let line = "{}";
 
-        let resultado = parse_line(linha);
+        let result = parse_line(line);
 
-        assert!(resultado.fields.is_empty());
+        assert!(result.as_object().is_some_and(|obj| obj.is_empty()));
     }
 }
