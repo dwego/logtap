@@ -80,6 +80,8 @@ async fn integration_source_parser_filter_sink_sends_log_to_http_server() {
         retry_backoff_max_secs: 0,
         filter_rules: vec![],
         mask_common_patterns: false,
+        dead_letter_max_bytes: 1024 * 1024,
+        dead_letter_max_files: 5,
     };
 
     let app = tokio::spawn(async move {
