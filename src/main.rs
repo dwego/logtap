@@ -1,27 +1,22 @@
 use clap::Parser;
 use logtap::Config;
-use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Logtap CLI")]
 struct Args {
-    #[arg(short, long, value_name = "logtap.toml")]
+    #[arg(short, long, value_name = "logtap.toml", default_value = "logtap.toml")]
     config_path: String,
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), String> {
     let args = Args::parse();
-    let path = PathBuf::from(&args.config_path);
 
-    if !path.exists() {
-        eprintln!("Config file not found: {:?}", args.config_path);
-        return;
-    }
-
-    let config = Config::load(&args.config_path).expect("failed to load config file");
+    let config = Config::load(&args.config_path).map_err(|e| e.to_string())?;
 
     println!("Loaded config: {:?}", config);
 
-    logtap::run(config).await.expect("logtap failed to run");
+    logtap::run(config).await.map_err(|e| e.to_string())?;
+
+    Ok(())
 }
