@@ -31,6 +31,12 @@ pub struct Config {
 
     #[serde(default = "default_mask_common_patterns")]
     pub mask_common_patterns: bool,
+
+    #[serde(default = "default_dead_letter_max_bytes")]
+    pub dead_letter_max_bytes: usize,
+
+    #[serde(default = "default_dead_letter_max_files")]
+    pub dead_letter_max_files: u64,
 }
 
 fn default_batch_size() -> usize {
@@ -53,6 +59,14 @@ fn default_retry_backoff_max_secs() -> u64 {
 }
 fn default_mask_common_patterns() -> bool {
     true
+}
+
+fn default_dead_letter_max_bytes() -> usize {
+    1024 * 1024 * 1024
+}
+
+fn default_dead_letter_max_files() -> u64 {
+    5
 }
 
 impl Config {
