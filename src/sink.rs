@@ -8,8 +8,18 @@ use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::time::{interval, sleep};
 
+/// Path used to store events that could not be delivered.
 const DEAD_LETTER_PATH: &str = "logtap.failed.jsonl";
 
+/// Runs the sink pipeline.
+///
+/// Receives log entries from a channel, groups them into batches, and sends
+/// them to the configured destination. Failed batches are handled by the
+/// retry/dead-letter mechanism.
+///
+/// The sink flushes data when either:
+/// - the configured batch size is reached;
+/// - the flush interval expires.
 pub async fn run_sink(cfg: Config, mut rx: Receiver<LogLine>) {
     let client = reqwest::Client::new();
     let mut batch: Vec<LogLine> = Vec::with_capacity(cfg.batch_size);
@@ -32,6 +42,13 @@ pub async fn run_sink(cfg: Config, mut rx: Receiver<LogLine>) {
     }
 }
 
+/// Attempts to deliver a batch to the configured sink endpoint.
+///
+/// Failed requests are retried using an exponential backoff strategy limited
+/// by the configured maximum retry count and maximum backoff duration.
+///
+/// When all retry attempts are exhausted, the batch is moved to the
+/// dead-letter file so that failed events are not silently lost.
 async fn flush_with_retry(client: &reqwest::Client, cfg: &Config, batch: &mut Vec<LogLine>) {
     if batch.is_empty() {
         return;
@@ -88,10 +105,14 @@ async fn flush_with_retry(client: &reqwest::Client, cfg: &Config, batch: &mut Ve
     }
 }
 
-// Reopens the file on every call instead of keeping a long-lived handle —
-// a handle stays bound to the underlying inode even if the file is later
-// renamed out from under it (e.g. for a manual replay), which would make
-// new failures silently land in the renamed-away file.
+/// Writes failed log entries to the dead-letter file.
+///
+/// The file is opened on every call instead of keeping a long-lived handle.
+/// This ensures new failures are written to the current dead-letter path even
+/// if the file has been rotated or renamed externally.
+///
+/// Before writing, the current dead-letter file is rotated if it exceeds the
+/// configured size limit.
 fn write_dead_letter(cfg: &Config, batch: &[LogLine]) {
     rotate_dead_letter_if_full(cfg);
 
@@ -118,16 +139,28 @@ fn write_dead_letter(cfg: &Config, batch: &[LogLine]) {
     }
 }
 
+
+
+/// Rotates the dead-letter file when it exceeds the configured size limit.
+///
+/// Rotation keeps a bounded number of historical files by shifting older
+/// files to the next index and removing the oldest one when the limit is
+/// reached.
+///
+/// When `dead_letter_max_files` is set to zero, the current dead-letter file
+/// is discarded instead of being rotated.s
 fn rotated_dead_letter_path(n: u64) -> PathBuf {
     PathBuf::from(format!("{DEAD_LETTER_PATH}.{n}"))
 }
 
-// Caps how big logtap.failed.jsonl is allowed to get. Same idea as
-// logrotate: once the current file crosses dead_letter_max_bytes, it's
-// shifted into .1, the old .1 becomes .2, and so on up to
-// dead_letter_max_files — at which point the oldest file is discarded to
-// make room. That eviction is real, permanent data loss, so it's always
-// logged loudly rather than happening quietly.
+/// Rotates the dead-letter file when it exceeds the configured size limit.
+///
+/// Rotation keeps a bounded number of historical files by shifting older
+/// files to the next index and removing the oldest one when the limit is
+/// reached.
+///
+/// When `dead_letter_max_files` is set to zero, the current dead-letter file
+/// is discarded instead of being rotated.
 fn rotate_dead_letter_if_full(cfg: &Config) {
     let current_size = match fs::metadata(DEAD_LETTER_PATH) {
         Ok(meta) => meta.len(),

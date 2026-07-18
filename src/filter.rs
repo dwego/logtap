@@ -3,29 +3,65 @@ use regex::Regex;
 use serde::Deserialize;
 use tokio::sync::mpsc::{Receiver, Sender};
 
+/// Operation used to compare a field value.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum RuleOp {
+    /// Matches when the field value is exactly.
     Equals,
+    
+    /// Matches when the field value contains the configured value.
     Contains,
+    
+    /// Matches when the field value satisfies the configured regular expression.
     Regex,
 }
 
+/// Action performed when a filter rule matches.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum RuleAction {
+    /// Remove the entire log entry from the processing pipeline.
     Drop,
+    
+    /// Replaces the matching field value with a masked value.
     Mask,
 }
 
+/// A single filtering rule applied to a log entry.
+///
+/// Rules define which field should be checked, how the value should be
+/// compared, and what action should be performed when a match occurs.
 #[derive(Debug, Deserialize, Clone)]
 pub struct FilterRule {
+    /// JSON field name to inspect.
     pub field: String,
+    
+    /// Comparison operation used to evaluate the field.
     pub op: RuleOp,
+    
+    /// Value or pattern used for maching.
     pub value: String,
+    
+    /// Action executed when the rule matches
     pub action: RuleAction,
 }
 
+/// Runs the log filtering pipeline.
+///
+/// Receives log entries from a channel, applies built-in masking patterns
+/// and configured filter rules, then forwards accepted logs to the output channel.
+///
+/// Logs can either be dropped, masked, or passed through unchanged depending
+/// on the configured rules.
+///
+/// # Arguments
+///
+/// * `rx` - Input channel receiving log entries.
+/// * `tx` - Output channel for filtered log entries.
+/// * `rules` - User-defined filtering rules.
+/// * `mask_common_patterns` - Enables built-in masking of sensitive patterns
+///   such as emails, credit card numbers, and API keys.
 pub async fn run_filter(
     mut rx: Receiver<LogLine>,
     tx: Sender<LogLine>,

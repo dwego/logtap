@@ -8,6 +8,19 @@ pub mod source;
 pub use config::Config;
 pub use record::LogLine;
 
+
+/// Application entry point that starts the processing pipeline.
+///
+/// Creates the communication channels and launches the source, parser,
+/// filter, and sink tasks.
+///
+/// The pipeline flow is:
+///
+/// ```text
+/// source -> parser -> filter -> sink
+/// ```
+///
+/// Tasks communicate through bounded channels using the configured capacity.
 pub async fn run(cfg: Config) -> anyhow::Result<()> {
     let (raw_tx, raw_rx) = tokio::sync::mpsc::channel::<String>(cfg.channel_capacity);
     let (parsed_tx, parsed_rx) = tokio::sync::mpsc::channel::<LogLine>(cfg.channel_capacity);

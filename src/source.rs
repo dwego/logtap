@@ -49,6 +49,10 @@ fn drain_new_lines(
     }
 }
 
+/// Creates a filesystem watcher for the given path.
+///
+/// The watcher sends filesystem events through the provided channel.
+/// Only events from the target file itself are monitored.
 fn watch(
     path: &Path,
     notify_tx: std_mpsc::Sender<notify::Result<Event>>,
@@ -60,6 +64,17 @@ fn watch(
     Ok(watcher)
 }
 
+/// Starts watching a source file and forwards newly appended lines to the
+/// provided channel.
+///
+/// The function begins reading from the current end of the file and waits for
+/// filesystem modification events to detect new content.
+///
+/// When the file is replaced during log rotation, the old file is drained,
+/// the new file is opened, and reading continues from the beginning of the
+/// replacement file.
+///
+/// Processing stops when the downstream receiver is closed.
 pub fn run_source(cfg: Config, tx: Sender<String>) -> Result<()> {
     let file = File::open(&cfg.source_path)?;
     let mut inode = file.metadata()?.ino();
