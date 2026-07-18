@@ -7,12 +7,19 @@ use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 
-// How often the watch loop wakes up even without a filesystem event, just to
-// check whether the downstream receiver is gone. Without this, the loop can
-// block forever on `notify_rx.recv()` after the rest of the pipeline shut
-// down, since there is no more filesystem activity left to notice it.
+/// Interval used to periodically check whether the output channel is closed.
+///
+/// Without this timeout, the watcher loop could block forever waiting for a
+/// filesystem event after the rest of the pipeline has already shut down.
 const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
+/// Reads new lines from a file as it changes and sends them to the pipeline.
+///
+/// The source starts reading from the current end of the file and only
+/// processes lines appended after startup.
+///
+/// The function watches the file for modifications and stops when the
+/// receiver side is closed.
 pub fn run_source(cfg: Config, tx: Sender<String>) -> Result<()> {
     let file = File::open(&cfg.source_path)?;
     let mut reader = BufReader::new(file);

@@ -8,8 +8,18 @@ use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::time::{interval, sleep};
 
+/// Path used to store events that could not be delivered.
 const DEAD_LETTER_PATH: &str = "logtap.failed.jsonl";
 
+/// Runs the sink pipeline.
+///
+/// Receives log entries from a channel, groups them into batches, and sends
+/// them to the configured destination. Failed batches are handled by the
+/// retry/dead-letter mechanism.
+///
+/// The sink flushes data when either:
+/// - the configured batch size is reached;
+/// - the flush interval expires.
 pub async fn run_sink(cfg: Config, mut rx: Receiver<LogLine>) {
     let client = reqwest::Client::new();
     let mut batch: Vec<LogLine> = Vec::with_capacity(cfg.batch_size);
