@@ -190,6 +190,12 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 CI runs all three on every pull request and on pushes to `main`.
 
+Tests are organized by what they're proving, one file per concern under `tests/` (each file is its own binary, so this costs nothing to keep separate):
+
+- `filter_test.rs`, `parser_test.rs`, `source_test.rs`, `sink_test.rs`, `notify_test.rs` — one stage or behavior at a time.
+- `integration_test.rs`, `cli_test.rs` — the full pipeline wired together, the second one through the actual compiled binary.
+- `stress_test.rs` — load/failure-shaped: proving an outcome (nothing lost) under conditions designed to trigger backpressure, not just checking one function's return value.
+
 ## Roadmap
 
 ### v1 acceptance criteria
@@ -197,11 +203,11 @@ CI runs all three on every pull request and on pushes to `main`.
 v1 is done when all of the following hold:
 
 - [x] No batch is ever lost silently — every failed send is retried or persisted locally.
-- [ ] The process survives log rotation without manual intervention.
-- [ ] No channel grows unbounded under any tested load condition.
-- [ ] Every config field is validated with a clear error message at startup — never fails silently at runtime.
+- [x] The process survives log rotation without manual intervention (standard rename-then-create logrotate behavior; `copytruncate` isn't handled yet).
+- [x] No channel grows unbounded under load — guaranteed by construction (every channel has a fixed `channel_capacity`), and backed by [`tests/stress_test.rs`](tests/stress_test.rs), which proves the *outcome* (a burst of logs during a prolonged outage is never lost) rather than measuring memory directly.
+- [ ] Every config field is validated with a clear error message at startup — never fails silently at runtime. *(deferred to v1.1 — Config::load already rejects a missing/malformed file with a clean error, just not individual bad field values like `batch_size = 0`)*
 - [x] Sensitive data is masked by default, even with no user-configured rules.
-- [ ] External visibility (metrics) into what the pipeline is doing, without reading logtap's own stderr output.
+- [ ] External visibility (metrics) into what the pipeline is doing, without reading logtap's own stderr output. *(deferred to v1.1 — stderr logging already covers retries, dead-letter writes, and rotation events)*
 - [x] End-to-end integration test covering the full pipeline, plus unit tests per stage.
 - [x] Installing and running the project requires no source reading — README and example config are enough.
 
