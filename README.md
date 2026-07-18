@@ -64,11 +64,13 @@ Once there's a second source (`stdin`, alongside the file tail) or a second dest
 
 ### 3. Reliability (the system must not silently lose data)
 
-This is the most important axis, and the first one that needs work. Today, if a batch fails to send, it's dropped — no retry, no persistence. That's acceptable for an MVP, but it's the first thing that needs to change before `logtap` is trusted with data that actually matters:
+This is the most important axis. Most of it is already in place:
 
 - **Retry with exponential backoff** in the sink before giving up on a batch.
-- **A local dead-letter file** — batches that fail repeatedly get written to disk (e.g. `logtap.failed.jsonl`) instead of lost, so they can be reprocessed later.
-- **Log rotation detection** — when the watched file is renamed and recreated (standard `logrotate` behavior in production), the source needs to notice and start reading the new file, instead of continuing to hold a handle to a file that no longer exists.
+- **A local dead-letter file** — batches that exhaust their retries get written to `logtap.failed.jsonl` instead of lost, one record per line, in the same shape `source` already produces so it can be replayed through `logtap` itself (see [Reprocessing the dead-letter file](#reprocessing-the-dead-letter-file)).
+- **Size-capped, rotating dead-letter files** — `logtap.failed.jsonl` rotates into `.1`, `.2`, etc. once it crosses `dead_letter_max_bytes`, so a prolonged outage fills disk predictably instead of without limit. Discarding the oldest rotated file is real data loss, so it's always logged loudly, never silently.
+
+What's still missing: **log rotation detection** — when the watched file is renamed and recreated (standard `logrotate` behavior in production), `source` needs to notice and start reading the new file, instead of continuing to hold a handle to a file that no longer exists.
 
 ### 4. Operability (visibility into the pipeline itself)
 
@@ -89,29 +91,39 @@ That discipline, more than any specific feature, is what determines whether the 
 
 ## Getting started
 
-`logtap` is currently a library crate — there is no CLI binary yet (see [Roadmap](#roadmap)). It's driven through `logtap::run`:
+Build the binary and point it at a config file:
 
-```rust
-use logtap::Config;
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let cfg = Config {
-        source_path: "app.log".into(),
-        sink_url: "http://localhost:8080/logs".to_string(),
-        batch_size: 100,
-        flush_interval_secs: 5,
-        channel_capacity: 1000,
-        filter_rules: vec![],
-    };
-
-    logtap::run(cfg).await
-}
+```bash
+cargo build --release
+./target/release/logtap --config-path logtap.toml
 ```
+
+`--config-path` defaults to `logtap.toml` in the current directory, so with a config file already in place, `./target/release/logtap` on its own is enough. See [`logtap.toml`](logtap.toml) in this repo for a working example.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Clean run. (Today the pipeline runs until killed — this is reserved for a future graceful shutdown.) |
+| `1` | An expected, fixable error: missing config file, invalid TOML, a malformed field. |
+| `101` | An unexpected internal panic — a bug, not a config problem. |
+
+### Docker
+
+```bash
+docker build -t logtap .
+
+docker run --rm \
+  -v $(pwd)/logtap.toml:/app/logtap.toml \
+  -v /path/to/your/app.log:/data/app.log \
+  logtap
+```
+
+The image ships only the binary — `logtap.toml` and the log file it tails are expected to be mounted in at runtime. `source_path` inside `logtap.toml` should point at wherever the log file lands *inside* the container (`/data/app.log` above), not at its path on the host.
 
 ### Configuration (`logtap.toml`)
 
-`Config` is deserializable from TOML via `serde`:
+`Config` is deserializable from TOML via `serde`. Only `source_path` and `sink_url` are required — everything else has a default:
 
 ```toml
 source_path = "app.log"
@@ -119,6 +131,12 @@ sink_url = "http://localhost:8080/logs"
 batch_size = 100
 flush_interval_secs = 5
 channel_capacity = 1000
+max_retries = 5
+retry_backoff_initial_ms = 500
+retry_backoff_max_secs = 30
+mask_common_patterns = true
+dead_letter_max_bytes = 1073741824
+dead_letter_max_files = 5
 
 [[filter_rules]]
 field = "level"
@@ -133,16 +151,34 @@ value = "^[^@]+@[^@]+\\.[^@]+$"
 action = "mask"
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `source_path` | path | File to tail. |
-| `sink_url` | string | HTTP endpoint the batches are `POST`ed to as a JSON array. |
-| `batch_size` | integer | Max records buffered before a flush is triggered. |
-| `flush_interval_secs` | integer | Max time between flushes, even if `batch_size` isn't reached. |
-| `channel_capacity` | integer | Bound applied to every internal channel — the backpressure knob. |
-| `filter_rules` | array | Ordered `FilterRule` entries (`field`, `op`, `value`, `action`); optional, defaults to empty. |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `source_path` | path | — (required) | File to tail. |
+| `sink_url` | string | — (required) | HTTP endpoint the batches are `POST`ed to as a JSON array. |
+| `batch_size` | integer | `50` | Max records buffered before a flush is triggered. |
+| `flush_interval_secs` | integer | `5` | Max time between flushes, even if `batch_size` isn't reached. |
+| `channel_capacity` | integer | `1000` | Bound applied to every internal channel — the backpressure knob. |
+| `max_retries` | integer | `5` | Attempts per batch before giving up and writing it to the dead-letter file. |
+| `retry_backoff_initial_ms` | integer | `500` | Backoff before the first retry; doubles on each subsequent attempt. |
+| `retry_backoff_max_secs` | integer | `30` | Ceiling on the backoff, however many retries have piled up. |
+| `mask_common_patterns` | boolean | `true` | Auto-mask emails, card numbers, and `sk-...`-style API keys, independent of `filter_rules`. |
+| `dead_letter_max_bytes` | integer | `1073741824` (1 GiB) | Size cap on `logtap.failed.jsonl` before it's rotated into `.1`, `.2`, etc. |
+| `dead_letter_max_files` | integer | `5` | How many rotated dead-letter files to keep before the oldest is discarded. |
+| `filter_rules` | array | `[]` | Ordered `FilterRule` entries (`field`, `op`, `value`, `action`). |
 
 `op` accepts `equals`, `contains`, or `regex`. `action` accepts `drop` or `mask`.
+
+### Reprocessing the dead-letter file
+
+Batches that exhaust `max_retries` are appended to `logtap.failed.jsonl` instead of being lost — one JSON record per line, in the same shape `source` already produces, so it can be replayed through `logtap` itself rather than needing a separate tool:
+
+```bash
+touch replay.log
+./target/release/logtap --config-path replay-logtap.toml &   # points source_path at replay.log
+cat logtap.failed.jsonl >> replay.log
+```
+
+`replay-logtap.toml` is a throwaway config pointing `source_path` at the empty `replay.log` and `sink_url` at the real destination. Since `logtap` tails from the end of the file it opens, appending the dead-letter contents into `replay.log` after it's already running makes it pick them up exactly like live traffic. Keep `batch_size` small (or `flush_interval_secs` short) in that config — otherwise the replayed lines just sit buffered until a batch actually fills up or the interval ticks. Once the file stops growing and everything's been delivered, stop the process and delete `logtap.failed.jsonl` and `replay.log`.
 
 ## Development
 
@@ -160,14 +196,14 @@ CI runs all three on every pull request and on pushes to `main`.
 
 v1 is done when all of the following hold:
 
-- [ ] No batch is ever lost silently — every failed send is retried or persisted locally.
+- [x] No batch is ever lost silently — every failed send is retried or persisted locally.
 - [ ] The process survives log rotation without manual intervention.
 - [ ] No channel grows unbounded under any tested load condition.
 - [ ] Every config field is validated with a clear error message at startup — never fails silently at runtime.
-- [ ] Sensitive data is masked by default, even with no user-configured rules.
+- [x] Sensitive data is masked by default, even with no user-configured rules.
 - [ ] External visibility (metrics) into what the pipeline is doing, without reading logtap's own stderr output.
-- [ ] End-to-end integration test covering the full pipeline, plus unit tests per stage.
-- [ ] Installing and running the project requires no source reading — README and example config are enough.
+- [x] End-to-end integration test covering the full pipeline, plus unit tests per stage.
+- [x] Installing and running the project requires no source reading — README and example config are enough.
 
 ## License
 
