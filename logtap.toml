@@ -1,0 +1,11 @@
+# Minimal working example — see the README's Configuration section for the
+# full field reference (defaults, dead-letter rotation, filter rule syntax).
+
+source_path = "app.log"
+sink_url = "http://localhost:8080/logs"
+
+[[filter_rules]]
+field = "level"
+op = "equals"
+value = "debug"
+action = "drop"
