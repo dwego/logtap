@@ -1,8 +1,12 @@
 use crate::config::Config;
 use crate::record::LogLine;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::time::{interval, sleep};
+
+const DEAD_LETTER_PATH: &str = "logtap.failed.jsonl";
 
 pub async fn run_sink(cfg: Config, mut rx: Receiver<LogLine>) {
     let client = reqwest::Client::new();
@@ -41,7 +45,7 @@ async fn flush_with_retry(client: &reqwest::Client, cfg: &Config, batch: &mut Ve
             }
             Ok(resp) => {
                 eprintln!(
-                    "logtap: tentativa {}/{} falhou — destino respondeu com status {}",
+                    "logtap: attempt {}/{} failed — server responded with status {}",
                     attempt + 1,
                     cfg.max_retries,
                     resp.status()
@@ -49,7 +53,7 @@ async fn flush_with_retry(client: &reqwest::Client, cfg: &Config, batch: &mut Ve
             }
             Err(err) => {
                 eprintln!(
-                    "logtap: tentativa {}/{} falhou — erro ao enviar lote ({} itens): {err}",
+                    "logtap: attempt {}/{} failed — error sending batch ({} items): {err}",
                     attempt + 1,
                     cfg.max_retries,
                     batch.len()
@@ -60,13 +64,13 @@ async fn flush_with_retry(client: &reqwest::Client, cfg: &Config, batch: &mut Ve
         attempt += 1;
 
         if attempt >= cfg.max_retries {
-            // TODO(fase 1 do roadmap): dead-letter em vez de descartar aqui.
-            // Por enquanto o lote é perdido depois de esgotar as tentativas.
             eprintln!(
-                "logtap: desistindo do lote ({} itens) após {} tentativas",
+                "logtap: abandoning batch of {} items after {} attempts — writing to {DEAD_LETTER_PATH}",
                 batch.len(),
                 cfg.max_retries
             );
+
+            write_dead_letter(batch);
             batch.clear();
             return;
         }
@@ -77,7 +81,35 @@ async fn flush_with_retry(client: &reqwest::Client, cfg: &Config, batch: &mut Ve
         let backoff =
             Duration::from_millis(backoff_ms).min(Duration::from_secs(cfg.retry_backoff_max_secs));
 
-        eprintln!("logtap: esperando {backoff:?} antes da próxima tentativa");
+        eprintln!("logtap: waiting {backoff:?} before next attempt");
         sleep(backoff).await;
+    }
+}
+
+// Reopens the file on every call instead of keeping a long-lived handle —
+// a handle stays bound to the underlying inode even if the file is later
+// renamed out from under it (e.g. for a manual replay), which would make
+// new failures silently land in the renamed-away file.
+fn write_dead_letter(batch: &[LogLine]) {
+    let mut file = match OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(DEAD_LETTER_PATH)
+    {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!(
+                "logtap: could not open {DEAD_LETTER_PATH} ({err}) — {} item(s) lost for good",
+                batch.len()
+            );
+            return;
+        }
+    };
+
+    for log in batch {
+        if let Err(err) = writeln!(file, "{log}") {
+            eprintln!("logtap: failed writing to {DEAD_LETTER_PATH}: {err}");
+            return;
+        }
     }
 }

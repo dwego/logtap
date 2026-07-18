@@ -107,3 +107,56 @@ async fn sink_posts_logs_when_batch_size_is_reached() {
         ])
     );
 }
+
+#[tokio::test]
+async fn sink_writes_batch_to_dead_letter_file_after_exhausting_retries() {
+    let dead_letter_path = PathBuf::from("logtap.failed.jsonl");
+    std::fs::remove_file(&dead_letter_path).ok();
+
+    // Bind a port, then drop the listener immediately — nothing will ever
+    // answer there, so every attempt fails fast with "connection refused".
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+
+    let cfg = Config {
+        source_path: PathBuf::from("unused.log"),
+        sink_url: format!("http://{address}/logs"),
+        batch_size: 1,
+        flush_interval_secs: 60,
+        channel_capacity: 10,
+        max_retries: 2,
+        retry_backoff_initial_ms: 1,
+        retry_backoff_max_secs: 1,
+        filter_rules: vec![],
+        mask_common_patterns: false,
+    };
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<LogLine>(cfg.channel_capacity);
+
+    let sink = tokio::spawn(run_sink(cfg, rx));
+
+    tx.send(serde_json::json!({ "message": "never delivered" }))
+        .await
+        .unwrap();
+
+    // 2 attempts with ~1ms backoff exhaust almost immediately; give it some slack.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    sink.abort();
+
+    let contents = std::fs::read_to_string(&dead_letter_path)
+        .expect("expected dead-letter file to have been created");
+
+    std::fs::remove_file(&dead_letter_path).ok();
+
+    let lines: Vec<serde_json::Value> = contents
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+
+    assert_eq!(
+        lines,
+        vec![serde_json::json!({ "message": "never delivered" })]
+    );
+}
