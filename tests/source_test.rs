@@ -26,6 +26,8 @@ async fn test_run_source_emite_linhas_novas() {
         retry_backoff_max_secs: 5,
         filter_rules: vec![],
         mask_common_patterns: false,
+        dead_letter_max_bytes: 1024 * 1024,
+        dead_letter_max_files: 5,
     };
 
     let _handle = tokio::task::spawn_blocking(move || run_source(cfg, tx));

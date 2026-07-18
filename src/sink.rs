@@ -1,7 +1,9 @@
 use crate::config::Config;
 use crate::record::LogLine;
+use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::time::{interval, sleep};
@@ -70,7 +72,7 @@ async fn flush_with_retry(client: &reqwest::Client, cfg: &Config, batch: &mut Ve
                 cfg.max_retries
             );
 
-            write_dead_letter(batch);
+            write_dead_letter(cfg, batch);
             batch.clear();
             return;
         }
@@ -90,7 +92,9 @@ async fn flush_with_retry(client: &reqwest::Client, cfg: &Config, batch: &mut Ve
 // a handle stays bound to the underlying inode even if the file is later
 // renamed out from under it (e.g. for a manual replay), which would make
 // new failures silently land in the renamed-away file.
-fn write_dead_letter(batch: &[LogLine]) {
+fn write_dead_letter(cfg: &Config, batch: &[LogLine]) {
+    rotate_dead_letter_if_full(cfg);
+
     let mut file = match OpenOptions::new()
         .create(true)
         .append(true)
@@ -111,5 +115,64 @@ fn write_dead_letter(batch: &[LogLine]) {
             eprintln!("logtap: failed writing to {DEAD_LETTER_PATH}: {err}");
             return;
         }
+    }
+}
+
+fn rotated_dead_letter_path(n: u64) -> PathBuf {
+    PathBuf::from(format!("{DEAD_LETTER_PATH}.{n}"))
+}
+
+// Caps how big logtap.failed.jsonl is allowed to get. Same idea as
+// logrotate: once the current file crosses dead_letter_max_bytes, it's
+// shifted into .1, the old .1 becomes .2, and so on up to
+// dead_letter_max_files — at which point the oldest file is discarded to
+// make room. That eviction is real, permanent data loss, so it's always
+// logged loudly rather than happening quietly.
+fn rotate_dead_letter_if_full(cfg: &Config) {
+    let current_size = match fs::metadata(DEAD_LETTER_PATH) {
+        Ok(meta) => meta.len(),
+        Err(_) => return, // no file yet — nothing to rotate
+    };
+
+    if current_size < cfg.dead_letter_max_bytes as u64 {
+        return;
+    }
+
+    if cfg.dead_letter_max_files == 0 {
+        if let Err(err) = fs::remove_file(DEAD_LETTER_PATH) {
+            eprintln!("logtap: failed to reset full dead-letter file: {err}");
+        } else {
+            eprintln!(
+                "logtap: dead-letter file hit {current_size} bytes and dead_letter_max_files is 0 — discarding it entirely"
+            );
+        }
+        return;
+    }
+
+    let oldest = rotated_dead_letter_path(cfg.dead_letter_max_files);
+    if oldest.exists() {
+        eprintln!(
+            "logtap: dead-letter rotation limit ({} files) reached — discarding oldest file {}",
+            cfg.dead_letter_max_files,
+            oldest.display()
+        );
+    }
+
+    for n in (1..cfg.dead_letter_max_files).rev() {
+        let from = rotated_dead_letter_path(n);
+        if from.exists() {
+            let to = rotated_dead_letter_path(n + 1);
+            if let Err(err) = fs::rename(&from, &to) {
+                eprintln!(
+                    "logtap: failed to rotate {} -> {}: {err}",
+                    from.display(),
+                    to.display()
+                );
+            }
+        }
+    }
+
+    if let Err(err) = fs::rename(DEAD_LETTER_PATH, rotated_dead_letter_path(1)) {
+        eprintln!("logtap: failed to rotate {DEAD_LETTER_PATH}: {err}");
     }
 }
